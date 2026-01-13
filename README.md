@@ -2,7 +2,7 @@
 
 <h2>Part 1: Theoretical Background and Manual Calculation</h2>
 
-The A* algorithm is an informed search technique that finds the shortest path by calculating a
+The algorithm is an informed search technique that finds the shortest path by calculating a
 total estimated cost, F(n), for every node
 
 <h3>The Core A* Cost Function</h3>
