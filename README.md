@@ -5,7 +5,7 @@
 The algorithm is an informed search technique that finds the shortest path by calculating a
 total estimated cost, F(n), for every node
 
-<h3>The Core A* Cost Function</h3>
+<h3>The Core Cost Function</h3>
 The function is composed of the known cost and the estimated cost:
 F(n) = G(n) + H(n)
 
