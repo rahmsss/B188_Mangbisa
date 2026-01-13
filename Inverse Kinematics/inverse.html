@@ -1,0 +1,414 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>3-Link Planar Kinematics</title>
+<style>
+body {
+font-family: Arial, sans-serif;
+display: flex;
+justify-content: center;
+align-items: center;
+height: 100vh;
+background-color: #f0f0f0;
+margin: 0;
+padding: 10px;
+box-sizing: border-box;
+}
+.container {
+display: flex;
+background: #fff;
+padding: 20px;
+border-radius: 8px;
+box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+flex-grow: 1;
+width: 100%;
+height: 100%;
+flex-wrap: wrap;
+box-sizing: border-box;
+}
+.controls {
+flex: 1 1 300px;
+padding-right: 20px;
+border-right: 1px solid #ccc;
+}
+.controls h2 {
+margin-top: 0;
+color: #333;
+}
+.input-group {
+margin-bottom: 15px;
+}
+label {
+display: block;
+margin-bottom: 5px;
+font-weight: bold;
+}
+input[type="range"], input[type="number"] {
+width: 100%;
+}
+.canvas-panel {
+flex: 1 1 500px;
+display: flex;
+flex-direction: column;
+align-items: center;
+margin-left: 20px;
+}
+#kinematicsCanvas {
+flex-grow: 1;
+border: 1px solid #000;
+background-color: #e9e9e9;
+width: 100%;
+}
+.output {
+margin-top: 20px;
+font-size: 1.1em;
+text-align: center;
+}
+.output p {
+margin: 5px 0;
+}
+#statusMessage {
+color: red;
+margin-top: 10px;
+min-height: 20px;
+}
+@media (max-width: 800px) {
+.container {
+flex-direction: column;
+padding: 10px;
+}
+.controls {
+flex: 1 1 auto;
+border-right: none;
+padding-right: 0;
+padding-bottom: 20px;
+border-bottom: 1px solid #ccc;
+}
+.canvas-panel {
+flex: 1 1 auto;
+margin-left: 0;
+}
+#kinematicsCanvas {
+width: 100%;
+height: auto;
+}
+}
+</style>
+</head>
+<body>
+<div class="container">
+<div class="controls">
+<h2>Robot Arm Controls</h2>
+<!-- Forward Kinematics Sliders -->
+<div class="input-group">
+<label for="angle1">Angle 1 (<span id="angle1-value">0</span>°):</label>
+<input type="range" id="angle1" min="-180" max="180" value="0">
+</div>
+<div class="input-group">
+<label for="angle2">Angle 2 (<span id="angle2-value">0</span>°):</label>
+<input type="range" id="angle2" min="-180" max="180" value="0">
+</div>
+<div class="input-group">
+<label for="angle3">Angle 3 (<span id="angle3-value">0</span>°):</label>
+<input type="range" id="angle3" min="-180" max="180" value="0">
+</div>
+<hr>
+<!-- Inverse Kinematics Inputs -->
+<h3>Inverse Kinematics</h3>
+<p>Enter a target coordinate to move the arm:</p>
+<div class="input-group">
+<label for="targetX">Target X:</label>
+<input type="number" id="targetX" value="200">
+</div>
+<div class="input-group">
+<label for="targetY">Target Y:</label>
+<input type="number" id="targetY" value="100">
+</div>
+<button id="calculateButton">Move to Target</button>
+<div id="statusMessage"></div>
+</div>
+<div class="canvas-panel">
+<canvas id="kinematicsCanvas" width="500" height="500"></canvas>
+<div class="output">
+<h3>End-Effector Coordinates:</h3>
+<p>X: <span id="x_coord">0.00</span></p>
+<p>Y: <span id="y_coord">0.00</span></p>
+</div>
+</div>
+</div>
+<script>
+// --------------------------------------------------------------------------
+// PART I: Initial Setup & Visualization (Provided - DO NOT CHANGE)
+// --------------------------------------------------------------------------
+const canvas = document.getElementById('kinematicsCanvas');
+const ctx = canvas.getContext('2d');
+const angle1Slider = document.getElementById('angle1');
+const angle2Slider = document.getElementById('angle2');
+const angle3Slider = document.getElementById('angle3');
+const angle1Value = document.getElementById('angle1-value');
+const angle2Value = document.getElementById('angle2-value');
+const angle3Value = document.getElementById('angle3-value');
+const xCoordSpan = document.getElementById('x_coord');
+const yCoordSpan = document.getElementById('y_coord');
+const calculateButton = document.getElementById('calculateButton');
+const targetXInput = document.getElementById('targetX');
+const targetYInput = document.getElementById('targetY');
+const statusMessage = document.getElementById('statusMessage');
+
+// Link lengths (DO NOT CHANGE THESE)
+const l1 = 150;
+const l2 = 100;
+const l3 = 25;
+
+// Adjust canvas size to fit the container
+function resizeCanvas() {
+const parent = canvas.parentElement;
+canvas.width = parent.clientWidth;
+canvas.height = parent.clientHeight - 50;
+draw();
+}
+
+window.addEventListener('load', resizeCanvas);
+window.addEventListener('resize', resizeCanvas);
+
+// Function to draw the grid and axes
+function drawGrid() {
+ctx.strokeStyle = '#ccc';
+ctx.lineWidth = 0.5;
+const gridStep = 10;
+const maxRange = Math.max(l1 + l2 + l3, Math.abs(parseFloat(targetXInput.value)),
+Math.abs(parseFloat(targetYInput.value))) + 100;
+const canvasXCenter = canvas.width / 2;
+const canvasYCenter = canvas.height / 2;
+
+for (let i = -maxRange; i <= maxRange; i += gridStep) {
+ctx.beginPath();
+ctx.moveTo(canvasXCenter - maxRange, canvasYCenter - i);
+ctx.lineTo(canvasXCenter + maxRange, canvasYCenter - i);
+ctx.stroke();
+if (i % 50 === 0 && i !== 0) {
+ctx.fillStyle = '#666';
+ctx.font = '10px Arial';
+ctx.fillText(i.toString(), canvasXCenter + 5, canvasYCenter - i - 2);
+}
+}
+
+for (let i = -maxRange; i <= maxRange; i += gridStep) {
+ctx.beginPath();
+ctx.moveTo(canvasXCenter + i, canvasYCenter - maxRange);
+ctx.lineTo(canvasXCenter + i, canvasYCenter + maxRange);
+ctx.stroke();
+if (i % 50 === 0 && i !== 0) {
+ctx.fillStyle = '#666';
+ctx.font = '10px Arial';
+ctx.fillText(i.toString(), canvasXCenter + i + 2, canvasYCenter + 15);
+}
+}
+
+ctx.strokeStyle = '#000';
+ctx.lineWidth = 1;
+ctx.beginPath();
+ctx.moveTo(canvasXCenter, 0);
+ctx.lineTo(canvasXCenter, canvas.height);
+ctx.moveTo(0, canvasYCenter);
+ctx.lineTo(canvas.width, canvasYCenter);
+ctx.stroke();
+}
+
+// Helper function to draw the arm
+function drawArm(p1, p2, p3) {
+const canvasXCenter = canvas.width / 2;
+const canvasYCenter = canvas.height / 2;
+
+ctx.beginPath();
+ctx.arc(canvasXCenter, canvasYCenter, 5, 0, 2 * Math.PI);
+ctx.fillStyle = 'black';
+ctx.fill();
+
+ctx.beginPath();
+ctx.moveTo(canvasXCenter, canvasYCenter);
+ctx.lineTo(canvasXCenter + p1.x, canvasYCenter - p1.y);
+ctx.lineWidth = 10;
+ctx.strokeStyle = '#3498db';
+ctx.stroke();
+
+ctx.beginPath();
+ctx.arc(canvasXCenter + p1.x, canvasYCenter - p1.y, 7, 0, 2 * Math.PI);
+ctx.fillStyle = '#2980b9';
+ctx.fill();
+
+ctx.beginPath();
+ctx.moveTo(canvasXCenter + p1.x, canvasYCenter - p1.y);
+ctx.lineTo(canvasXCenter + p2.x, canvasYCenter - p2.y);
+ctx.lineWidth = 8;
+ctx.strokeStyle = '#2ecc71';
+ctx.stroke();
+
+ctx.beginPath();
+ctx.moveTo(canvasXCenter + p2.x, canvasYCenter - p2.y);
+ctx.lineTo(canvasXCenter + p3.x, canvasYCenter - p3.y);
+ctx.lineWidth = 6;
+ctx.strokeStyle = '#f1c40f';
+ctx.stroke();
+
+ctx.beginPath();
+ctx.arc(canvasXCenter + p3.x, canvasYCenter - p3.y, 5, 0, 2 * Math.PI);
+ctx.fillStyle = '#e67e22';
+ctx.fill();
+}
+
+// Main draw function
+function draw() {
+ctx.clearRect(0, 0, canvas.width, canvas.height);
+drawGrid();
+
+const angle1 = parseFloat(angle1Slider.value);
+const angle2 = parseFloat(angle2Slider.value);
+const angle3 = parseFloat(angle3Slider.value);
+
+angle1Value.textContent = angle1;
+angle2Value.textContent = angle2;
+angle3Value.textContent = angle3;
+
+const rad1 = (angle1) * Math.PI / 180;
+const rad2 = (angle1 + angle2) * Math.PI / 180;
+const rad3 = (angle1 + angle2 + angle3) * Math.PI / 180;
+
+const x1 = l1 * Math.cos(rad1);
+const y1 = l1 * Math.sin(rad1);
+const x2 = x1 + l2 * Math.cos(rad2);
+const y2 = y1 + l2 * Math.sin(rad2);
+const x3 = x2 + l3 * Math.cos(rad3);
+const y3 = y2 + l3 * Math.sin(rad3);
+
+xCoordSpan.textContent = x3.toFixed(2);
+yCoordSpan.textContent = y3.toFixed(2);
+
+const xTarget = parseFloat(targetXInput.value);
+const yTarget = parseFloat(targetYInput.value);
+
+if (!isNaN(xTarget) && !isNaN(yTarget)) {
+const targetCanvasX = canvas.width / 2 + xTarget;
+const targetCanvasY = canvas.height / 2 - yTarget;
+
+ctx.strokeStyle = 'red';
+ctx.lineWidth = 2;
+ctx.beginPath();
+ctx.moveTo(targetCanvasX - 5, targetCanvasY);
+ctx.lineTo(targetCanvasX + 5, targetCanvasY);
+ctx.moveTo(targetCanvasX, targetCanvasY - 5);
+ctx.lineTo(targetCanvasX, targetCanvasY + 5);
+ctx.stroke();
+
+ctx.fillStyle = 'red';
+ctx.font = '12px Arial';
+ctx.fillText(`Target: (${xTarget.toFixed(0)}, ${yTarget.toFixed(0)})`, targetCanvasX + 10, targetCanvasY - 10);
+}
+
+drawArm({x: x1, y: y1}, {x: x2, y: y2}, {x: x3, y: y3});
+}
+
+angle1Slider.addEventListener('input', draw);
+angle2Slider.addEventListener('input', draw);
+angle3Slider.addEventListener('input', draw);
+
+draw();
+
+/**
+ * Helper function to convert radians to degrees.
+ */
+function radiansToDegrees(radians) {
+return radians * 180 / Math.PI;
+}
+
+/**
+ * Calculates the joint angles (theta1, theta2, theta3) to reach a specific target coordinate.
+ * Implements the analytical solution for a 3-link planar manipulator using inverse kinematics.
+ */
+function calculateInverseKinematics(xTarget, yTarget) {
+// Step 1: Calculate the effective target orientation (simplified assumption)
+const targetOrientation = Math.atan2(yTarget, xTarget);
+  
+// Step 2: Account for the third link to find the effective target for the first two links
+const xTarget_prime = xTarget - l3 * Math.cos(targetOrientation);
+const yTarget_prime = yTarget - l3 * Math.sin(targetOrientation);
+  
+// Step 3: Calculate distance to the effective target
+const d = Math.sqrt(xTarget_prime * xTarget_prime + yTarget_prime * yTarget_prime);
+  
+// Step 4: Check if target is reachable by the first two links
+if (d > (l1 + l2)) {
+statusMessage.textContent = `Target unreachable! Distance ${d.toFixed(2)} exceeds maximum reach ${(l1 + l2).toFixed(2)}.`;
+statusMessage.style.color = 'red';
+return null;
+}
+  
+if (d < Math.abs(l1 - l2)) {
+statusMessage.textContent = `Target too close! Distance ${d.toFixed(2)} is less than minimum reach ${Math.abs(l1 - l2).toFixed(2)}.`;
+statusMessage.style.color = 'red';
+return null;
+}
+  
+// Step 5: Calculate angle alpha at joint 2 using Law of Cosines
+const cosAlpha = (l1 * l1 + l2 * l2 - d * d) / (2 * l1 * l2);
+  
+// Clamp cosAlpha to [-1, 1] to handle floating-point errors
+const cosAlphaClamped = Math.max(-1, Math.min(1, cosAlpha));
+const alpha = Math.acos(cosAlphaClamped);
+  
+// Step 6: Calculate theta2 (angle at joint 2)
+// theta2 is the exterior angle, so it's (180° - alpha)
+const theta2 = radiansToDegrees(Math.PI - alpha);
+  
+// Step 7: Calculate angle beta using Law of Cosines
+const cosBeta = (l1 * l1 + d * d - l2 * l2) / (2 * l1 * d);
+const cosBetaClamped = Math.max(-1, Math.min(1, cosBeta));
+const beta = Math.acos(cosBetaClamped);
+  
+// Step 8: Calculate theta1
+// theta1 is the angle from the x-axis to link 1
+// It's composed of: angle to effective target - beta
+const angleToTarget = Math.atan2(yTarget_prime, xTarget_prime);
+const theta1 = radiansToDegrees(angleToTarget - beta);
+  
+// Step 9: Calculate theta3
+// The total orientation should match the target orientation
+// Total orientation = theta1 + theta2 + theta3 = targetOrientation
+const currentOrientation = (theta1 + theta2) * Math.PI / 180;
+const theta3 = radiansToDegrees(targetOrientation - currentOrientation);
+  
+return {
+angle1: theta1,
+angle2: theta2,
+angle3: theta3
+};
+}
+
+// Event listener for the "Move to Target" button
+calculateButton.addEventListener('click', () => {
+const xTarget = parseFloat(targetXInput.value);
+const yTarget = parseFloat(targetYInput.value);
+statusMessage.textContent = "";
+  
+if (isNaN(xTarget) || isNaN(yTarget)) {
+statusMessage.textContent = "Please enter valid numbers for X and Y.";
+statusMessage.style.color = 'red';
+return;
+}
+  
+const angles = calculateInverseKinematics(xTarget, yTarget);
+  
+if (angles) {
+angle1Slider.value = angles.angle1;
+angle2Slider.value = angles.angle2;
+angle3Slider.value = angles.angle3;
+draw();
+statusMessage.textContent = `Moved to target. Angles: θ1=${angles.angle1.toFixed(2)}°, θ2=${angles.angle2.toFixed(2)}°, θ3=${angles.angle3.toFixed(2)}°`;
+statusMessage.style.color = 'green';
+}
+});
+
+</script>
+</body>
+</html>
