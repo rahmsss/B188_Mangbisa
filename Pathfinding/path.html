@@ -1,0 +1,447 @@
+<!DOCTYPE html>
+<html>
+<head>
+ <meta name="viewport" content="width=device-width, initial-scale=1.0">
+ <title>A* Path Planning Simulation</title>
+ <script src="https://cdn.tailwindcss.com"></script>
+ <style>
+ :root {
+ --grid-size: 50px;
+ }
+ body { font-family: "Inter", sans-serif; display: flex; flex-direction: column; align-items: center; background-color: #f7fafc; padding: 20px; }
+ .grid-container {
+ display: grid;
+ grid-template-columns: repeat(5, var(--grid-size));
+ grid-template-rows: repeat(5, var(--grid-size));
+ border: 3px solid #2d3748;
+ box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+ border-radius: 8px;
+ margin-top: 20px;
+ max-width: 90vw;
+ }
+ .cell {
+ border: 1px solid #e2e8f0;
+ display: flex;
+ flex-direction: column;
+ justify-content: center;
+ align-items: center;
+ font-size: 10px;
+ cursor: pointer;
+ position: relative;
+ transition: background-color 0.2s, transform 0.1s;
+ user-select: none;
+ background-color: #ffffff;
+ font-weight: 500;
+ }
+ .cell:hover { transform: scale(1.02); }
+ .dragging .cell:hover { transform: none; }
+ .obstacle { background-color: #333333; cursor: default; }
+ .start { background-color: #10b981 !important; color: white; font-weight: bold; }
+ .goal { background-color: #3b82f6 !important; color: white; font-weight: bold; }
+ .path { background-color: #8b5cf6 !important; color: white; font-weight: bold; }
+ .expanded { background-color: #fcd34d !important; border: 2px solid #b45309; }
+ .goal { cursor: grab; }
+ .goal:active { cursor: grabbing; opacity: 0.7; }
+ .cell.highlight-drop {
+ box-shadow: 0 0 0 4px #3b82f6 inset;
+ transform: scale(1.05);
+ }
+ .drag-ghost {
+ position: absolute;
+ pointer-events: none;
+ z-index: 1000;
+ opacity: 0.8;
+ background-color: #3b82f6;
+ color: white;
+ display: flex;
+ justify-content: center;
+ align-items: center;
+ font-weight: bold;
+ border-radius: 8px;
+ box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+ }
+ @media (max-width: 600px) {
+ :root { --grid-size: 45px; }
+ .grid-container { grid-template-columns: repeat(5, var(--grid-size)); grid-template-rows: repeat(5, var(--grid-size)); }
+ }
+ .h-cost { font-size: 8px; color: #555; position: absolute; top: 2px; right: 2px; }
+ .expanded .h-cost { color: #b45309; }
+ .g-cost { font-size: 8px; color: #1f2937; position: absolute; bottom: 2px; left: 2px; }
+ </style>
+</head>
+<body>
+ <div class="max-w-xl w-full bg-white p-6 rounded-xl shadow-lg">
+ <h1 class="text-3xl font-extrabold text-gray-800 mb-2">A* Path Planning Lab</h1>
+ <p class="text-gray-600 mb-4">Click cells to toggle obstacles. Drag the GOAL to a new location. Click "Run A* Simulation" to find the shortest path.</p>
+ 
+ <div class="flex flex-col md:flex-row space-y-4 md:space-y-0 md:space-x-4 mb-6">
+ <button id="reset-button" class="bg-red-500 hover:bg-red-600 text-white font-bold py-2 px-4 rounded-lg transition duration-150">
+ Reset Map
+ </button>
+ <button id="run-button" class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-lg transition duration-150">
+ Run A* Simulation
+ </button>
+ </div>
+ <div id="pathfinding-grid" class="grid-container mx-auto"></div>
+ <div id="status-message" class="mt-4 p-3 bg-yellow-100 border border-yellow-300 text-yellow-800 rounded-lg text-sm hidden"></div>
+ </div>
+ <script>
+ const GRID_SIZE = 5;
+ const START_POS = { x: 0, y: 0 };
+ let GOAL_POS = { x: 4, y: 4 };
+ let currentGridData = [
+ [2, 1, 1, 0, 1],
+ [1, 1, 1, 1, 1],
+ [1, 0, 1, 0, 1],
+ [1, 1, 1, 1, 1],
+ [1, 1, 1, 1, 3]
+ ];
+ const initialGridData = JSON.parse(JSON.stringify(currentGridData));
+ const gridContainer = document.getElementById('pathfinding-grid');
+ const runButton = document.getElementById('run-button');
+ const resetButton = document.getElementById('reset-button');
+ const statusMessage = document.getElementById('status-message');
+ let isDraggingGoal = false;
+ let draggedElement = null;
+ let dragGhost = null;
+
+ class Node {
+ constructor(x, y, parent = null) {
+ this.x = x;
+ this.y = y;
+ this.parent = parent;
+ this.g = 0;
+ this.h = calculateManhattan(x, y, GOAL_POS.x, GOAL_POS.y);
+ this.f = this.g + this.h;
+ }
+ isEqual(other) {
+ return this.x === other.x && this.y === other.y;
+ }
+ }
+
+ function calculateManhattan(x1, y1, x2, y2) {
+ return Math.abs(x1 - x2) + Math.abs(y1 - y2);
+ }
+
+ function isValid(x, y) {
+ return x >= 0 && x < GRID_SIZE && y >= 0 && y < GRID_SIZE;
+ }
+
+ function isTraversable(x, y) {
+ return currentGridData[y][x] !== 0;
+ }
+
+ function getNode(x, y) {
+ return document.querySelector(`.cell[data-x='${x}'][data-y='${y}']`);
+ }
+
+ function initializeGrid(data) {
+ gridContainer.innerHTML = '';
+ statusMessage.classList.add('hidden');
+ document.body.classList.remove('dragging');
+ if (dragGhost) {
+ document.body.removeChild(dragGhost);
+ dragGhost = null;
+ }
+ for (let y = 0; y < GRID_SIZE; y++) {
+ for (let x = 0; x < GRID_SIZE; x++) {
+ const cell = document.createElement('div');
+ cell.classList.add('cell');
+ cell.dataset.x = x;
+ cell.dataset.y = y;
+ const hCost = calculateManhattan(x, y, GOAL_POS.x, GOAL_POS.y);
+ const hLabel = document.createElement('span');
+ hLabel.classList.add('h-cost');
+ hLabel.textContent = `H: ${hCost}`;
+ cell.appendChild(hLabel);
+ const gLabel = document.createElement('span');
+ gLabel.classList.add('g-cost');
+ cell.appendChild(gLabel);
+ if (data[y][x] === 0) {
+ cell.classList.add('obstacle');
+ cell.style.cursor = 'pointer';
+ } else if (data[y][x] === 2) {
+ cell.classList.add('start');
+ cell.textContent = 'START';
+ cell.style.cursor = 'default';
+ } else if (data[y][x] === 3) {
+ cell.classList.add('goal');
+ cell.textContent = 'GOAL';
+ cell.addEventListener('mousedown', startGoalDrag);
+ cell.addEventListener('touchstart', startGoalDrag);
+ } else {
+ cell.textContent = '';
+ }
+ if (data[y][x] === 0 || data[y][x] === 1) {
+ cell.addEventListener('click', function() {
+ if (!this.classList.contains('start') && !this.classList.contains('goal')) {
+ const isObstacle = this.classList.toggle('obstacle');
+ currentGridData[y][x] = isObstacle ? 0 : 1;
+ cleanPathfindingClasses();
+ statusMessage.classList.add('hidden');
+ }
+ });
+ }
+ gridContainer.appendChild(cell);
+ }
+ }
+ }
+
+ function startGoalDrag(e) {
+ if (e.button === 2) return;
+ const cell = e.currentTarget;
+ if (!cell.classList.contains('goal')) return;
+ isDraggingGoal = true;
+ draggedElement = cell;
+ dragGhost = cell.cloneNode(true);
+ dragGhost.classList.add('drag-ghost');
+ dragGhost.classList.remove('cell', 'goal');
+ dragGhost.style.pointerEvents = 'none';
+ const rect = cell.getBoundingClientRect();
+ dragGhost.style.width = `${rect.width}px`;
+ dragGhost.style.height = `${rect.height}px`;
+ document.body.appendChild(dragGhost);
+ draggedElement.style.opacity = 0.3;
+ draggedElement.textContent = '';
+ document.body.classList.add('dragging');
+ if (e.type.startsWith('touch')) {
+ e.preventDefault();
+ }
+ window.addEventListener('mousemove', dragGoal);
+ window.addEventListener('mouseup', endGoalDrag);
+ window.addEventListener('touchmove', dragGoal);
+ window.addEventListener('touchend', endGoalDrag);
+ cleanPathfindingClasses();
+ statusMessage.classList.remove('hidden', 'bg-blue-100', 'border-blue-300', 'text-blue-800');
+ statusMessage.classList.add('bg-yellow-100', 'border-yellow-300', 'text-yellow-800');
+ statusMessage.textContent = 'Drag GOAL to a new location. (Cannot drop on START or Obstacles)';
+ }
+
+ function dragGoal(e) {
+ if (!isDraggingGoal || !draggedElement || !dragGhost) return;
+ let clientX, clientY;
+ if (e.type.startsWith('touch')) {
+ clientX = e.touches[0].clientX;
+ clientY = e.touches[0].clientY;
+ e.preventDefault();
+ } else {
+ clientX = e.clientX;
+ clientY = e.clientY;
+ }
+ const cellWidth = draggedElement.offsetWidth;
+ const cellHeight = draggedElement.offsetHeight;
+ dragGhost.style.left = `${clientX - cellWidth / 2}px`;
+ dragGhost.style.top = `${clientY - cellHeight / 2}px`;
+ dragGhost.style.display = 'none';
+ let targetElement = document.elementFromPoint(clientX, clientY);
+ dragGhost.style.display = 'flex';
+ document.querySelectorAll('.cell.highlight-drop').forEach(c => c.classList.remove('highlight-drop'));
+ let dropTarget = targetElement;
+ while (dropTarget && !dropTarget.classList.contains('cell') && dropTarget !== document.body) {
+ dropTarget = dropTarget.parentElement;
+ }
+ if (dropTarget && dropTarget.classList.contains('cell')) {
+ const x = parseInt(dropTarget.dataset.x);
+ const y = parseInt(dropTarget.dataset.y);
+ if (!(x === GOAL_POS.x && y === GOAL_POS.y) && !dropTarget.classList.contains('obstacle') && !dropTarget.classList.contains('start')) {
+ dropTarget.classList.add('highlight-drop');
+ }
+ }
+ }
+
+ function endGoalDrag(e) {
+ if (!isDraggingGoal) return;
+ isDraggingGoal = false;
+ document.body.classList.remove('dragging');
+ let clientX, clientY;
+ if (e.type.startsWith('touch')) {
+ if (e.changedTouches && e.changedTouches.length > 0) {
+ clientX = e.changedTouches[0].clientX;
+ clientY = e.changedTouches[0].clientY;
+ } else {
+ console.error("Touch end event missing changedTouches. Drop failed.");
+ initializeGrid(currentGridData);
+ statusMessage.textContent = 'GOAL location unchanged. Drag to an empty, open cell.';
+ statusMessage.classList.add('bg-yellow-100', 'border-yellow-300', 'text-yellow-800');
+ return;
+ }
+ } else {
+ clientX = e.clientX;
+ clientY = e.clientY;
+ }
+ if (dragGhost) dragGhost.style.display = 'none';
+ let targetElement = document.elementFromPoint(clientX, clientY);
+ if (dragGhost) {
+ document.body.removeChild(dragGhost);
+ dragGhost = null;
+ }
+ let dropTarget = targetElement;
+ while (dropTarget && !dropTarget.classList.contains('cell') && dropTarget !== document.body) {
+ dropTarget = dropTarget.parentElement;
+ }
+ document.querySelectorAll('.cell.highlight-drop').forEach(c => c.classList.remove('highlight-drop'));
+ const oldX = GOAL_POS.x;
+ const oldY = GOAL_POS.y;
+ let newX = -1, newY = -1;
+ draggedElement = null;
+ if (dropTarget && dropTarget.classList.contains('cell')) {
+ newX = parseInt(dropTarget.dataset.x);
+ newY = parseInt(dropTarget.dataset.y);
+ if (!(newX === oldX && newY === oldY) && !dropTarget.classList.contains('obstacle') && !dropTarget.classList.contains('start')) {
+ currentGridData[oldY][oldX] = 1;
+ currentGridData[newY][newX] = 3;
+ GOAL_POS.x = newX;
+ GOAL_POS.y = newY;
+ initializeGrid(currentGridData);
+ statusMessage.textContent = `GOAL moved to (${newX}, ${newY})! Click "Run A* Simulation" to find the new path.`;
+ statusMessage.classList.remove('hidden', 'bg-yellow-100', 'border-yellow-300', 'text-yellow-800');
+ statusMessage.classList.add('bg-blue-100', 'border-blue-300', 'text-blue-800');
+ return;
+ }
+ }
+ initializeGrid(currentGridData);
+ statusMessage.textContent = 'GOAL location unchanged. Drag to an empty, open cell.';
+ statusMessage.classList.add('bg-yellow-100', 'border-yellow-300', 'text-yellow-800');
+ }
+
+ function cleanPathfindingClasses() {
+ document.querySelectorAll('.cell').forEach(cell => {
+ cell.classList.remove('expanded', 'path');
+ let gSpan = cell.querySelector('.g-cost');
+ if (gSpan) gSpan.textContent = '';
+ if (!cell.classList.contains('start') && !cell.classList.contains('goal')) {
+ cell.textContent = '';
+ }
+ });
+ }
+
+ async function aStarSearch() {
+ cleanPathfindingClasses();
+ let startNode = new Node(START_POS.x, START_POS.y);
+ let goalNode = new Node(GOAL_POS.x, GOAL_POS.y);
+ let openList = [startNode];
+ let closedList = [];
+ const delay = 50;
+
+ while (openList.length > 0) {
+ let currentNode = openList[0];
+ let currentIndex = 0;
+ for (let i = 1; i < openList.length; i++) {
+ if (openList[i].f < currentNode.f || (openList[i].f === currentNode.f && openList[i].h < currentNode.h)) {
+ currentNode = openList[i];
+ currentIndex = i;
+ }
+ }
+ openList.splice(currentIndex, 1);
+ closedList.push(currentNode);
+ const currentCell = getNode(currentNode.x, currentNode.y);
+ if (currentCell && !currentCell.classList.contains('start') && !currentCell.classList.contains('goal')) {
+ currentCell.classList.add('expanded');
+ let gSpan = currentCell.querySelector('.g-cost');
+ if (gSpan) gSpan.textContent = `G: ${currentNode.g}`;
+ }
+ await new Promise(resolve => setTimeout(resolve, delay));
+ if (currentNode.isEqual(goalNode)) {
+ tracePath(currentNode);
+ return true;
+ }
+ const neighbors = [
+ { x: currentNode.x, y: currentNode.y - 1 },
+ { x: currentNode.x, y: currentNode.y + 1 },
+ { x: currentNode.x - 1, y: currentNode.y },
+ { x: currentNode.x + 1, y: currentNode.y }
+ ];
+ for (const neighborPos of neighbors) {
+ if (!isValid(neighborPos.x, neighborPos.y) || !isTraversable(neighborPos.x, neighborPos.y)) {
+ continue;
+ }
+ if (closedList.some(node => node.x === neighborPos.x && node.y === neighborPos.y)) {
+ continue;
+ }
+ let neighbor = new Node(neighborPos.x, neighborPos.y, currentNode);
+ neighbor.g = currentNode.g + 1;
+ neighbor.h = calculateManhattan(neighbor.x, neighbor.y, GOAL_POS.x, GOAL_POS.y);
+ neighbor.f = neighbor.g + neighbor.h;
+ let existingNode = openList.find(node => node.x === neighbor.x && node.y === neighbor.y);
+ if (existingNode) {
+ if (neighbor.g < existingNode.g) {
+ existingNode.g = neighbor.g;
+ existingNode.f = neighbor.f;
+ existingNode.parent = currentNode;
+ }
+ } else {
+ openList.push(neighbor);
+ }
+ }
+ }
+ return false;
+ }
+
+ function tracePath(node) {
+ const pathNodes = [];
+ let tempNode = node;
+ while (tempNode) {
+ pathNodes.push(tempNode);
+ tempNode = tempNode.parent;
+ }
+ const totalPathLength = pathNodes.length - 1;
+ const startCell = getNode(START_POS.x, START_POS.y);
+ if (startCell) {
+ startCell.classList.remove('expanded');
+ startCell.classList.add('path');
+ startCell.textContent = 'START';
+ }
+ const goalCell = getNode(GOAL_POS.x, GOAL_POS.y);
+ if (goalCell) {
+ goalCell.classList.remove('expanded');
+ goalCell.classList.add('path');
+ goalCell.textContent = 'GOAL';
+ }
+ let stepNumber = 1;
+ for (let i = pathNodes.length - 2; i >= 1; i--) {
+ const stepNode = pathNodes[i];
+ const cell = getNode(stepNode.x, stepNode.y);
+ if (cell) {
+ cell.classList.remove('expanded');
+ cell.classList.add('path');
+ cell.textContent = `STEP ${stepNumber}`;
+ }
+ stepNumber++;
+ }
+ statusMessage.textContent = `Path found! Total steps (G-cost): ${totalPathLength}. (Steps count up from START)`;
+ statusMessage.classList.remove('hidden', 'bg-yellow-100', 'border-yellow-300', 'text-yellow-800', 'bg-red-100', 'border-red-300', 'text-red-800', 'bg-blue-100', 'border-blue-300', 'text-blue-800');
+ statusMessage.classList.add('bg-green-100', 'border-green-300', 'text-green-800');
+ }
+
+ runButton.addEventListener('click', async () => {
+ cleanPathfindingClasses();
+ runButton.disabled = true;
+ resetButton.disabled = true;
+ statusMessage.textContent = 'Searching for path...';
+ statusMessage.classList.remove('hidden', 'bg-green-100', 'border-green-300', 'text-green-800', 'bg-red-100', 'border-red-300', 'text-red-800', 'bg-blue-100', 'border-blue-300', 'text-blue-800');
+ statusMessage.classList.add('bg-yellow-100', 'border-yellow-300', 'text-yellow-800');
+ const pathFound = await aStarSearch();
+ if (!pathFound) {
+ statusMessage.textContent = 'No path could be found!';
+ statusMessage.classList.remove('bg-yellow-100', 'border-yellow-300', 'text-yellow-800');
+ statusMessage.classList.add('bg-red-100', 'border-red-300', 'text-red-800');
+ }
+ runButton.disabled = false;
+ resetButton.disabled = false;
+ });
+
+ resetButton.addEventListener('click', () => {
+ currentGridData = JSON.parse(JSON.stringify(initialGridData));
+ GOAL_POS.x = 4;
+ GOAL_POS.y = 4;
+ initializeGrid(currentGridData);
+ statusMessage.classList.add('hidden');
+ statusMessage.classList.remove('bg-green-100', 'border-green-300', 'text-green-800', 'bg-red-100', 'border-red-300', 'text-red-800', 'bg-blue-100', 'border-blue-300', 'text-blue-800');
+ });
+
+ window.onload = function() {
+ initializeGrid(currentGridData);
+ };
+ </script>
+</body>
+</html>
